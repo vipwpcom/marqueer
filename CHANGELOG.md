@@ -1,3 +1,6 @@
+## 2.4.3
+Fixed children update issue by ensuring proxy delegate updates and resetting measured size on widget rebuilds \
+
 ## 2.4.2
 Fixed content update issue (e.g. text color changes) by disabling delegate caching when `intrinsicCrossAxisSize` is false \
 

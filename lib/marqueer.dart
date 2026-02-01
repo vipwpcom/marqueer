@@ -304,7 +304,7 @@ class _MarqueerState extends State<Marqueer> with WidgetsBindingObserver {
   bool _autoStartScheduled = false;
 
   /// Proxy delegate to maintain stability while allowing dynamic updates
-  late final _proxyDelegate = _MarqueerProxyDelegate(this);
+  _MarqueerProxyDelegate get _proxyDelegate => _MarqueerProxyDelegate(this);
 
   /// Recalculates intrinsic size by resetting measurement
   /// Called by controller.recalculateIntrinsicSize()
@@ -591,7 +591,9 @@ class _MarqueerState extends State<Marqueer> with WidgetsBindingObserver {
   void didChangeMetrics() {
     super.didChangeMetrics();
 
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
 
     final size = MediaQuery.sizeOf(context);
 
@@ -630,8 +632,9 @@ class _MarqueerState extends State<Marqueer> with WidgetsBindingObserver {
   void didUpdateWidget(covariant Marqueer oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // Reset measured size if intrinsicCrossAxisSize setting changed
-    if (widget.intrinsicCrossAxisSize != oldWidget.intrinsicCrossAxisSize) {
+    // Reset measured size if intrinsicCrossAxisSize setting or delegate changed
+    if (widget.intrinsicCrossAxisSize != oldWidget.intrinsicCrossAxisSize ||
+        widget.delegate != oldWidget.delegate) {
       _measuredCrossAxisSize = null;
       _autoStartScheduled = false;
     }
