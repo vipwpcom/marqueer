@@ -1,7 +1,6 @@
 library;
 
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -290,7 +289,11 @@ class _MarqueerState extends State<Marqueer> with WidgetsBindingObserver {
   late bool interaction = widget.interaction;
 
   Size? viewSize;
-  bool _ignorePointerProcessed = false;
+
+  /// Cached reference to the [RenderIgnorePointer] Flutter inserts inside
+  /// every [Scrollable] (via `_ignorePointerKey`). It is reused on every new
+  /// scroll activity to avoid re-walking the render tree.
+  RenderIgnorePointer? _cachedIgnorePointer;
 
   Timer? timerStarter;
   Timer? timerLoop;
@@ -340,24 +343,25 @@ class _MarqueerState extends State<Marqueer> with WidgetsBindingObserver {
 
     try {
       unawaited(
-        scrollController.animateTo(
-          position,
-          duration: duration,
-          curve: Curves.linear,
-        ),
+        scrollController
+            .animateTo(
+              position,
+              duration: duration,
+              curve: Curves.linear,
+            )
+            .catchError((Object e) {
+              if (kDebugMode) {
+                debugPrint('Marqueer animation error (async): $e');
+              }
+            }),
       );
-    } catch (e) {
+    } on Exception catch (e) {
       if (kDebugMode) {
         debugPrint('Marqueer animation error: $e');
       }
     }
 
-    if (widget.scrollablePointerIgnoring &&
-        mounted &&
-        !_ignorePointerProcessed) {
-      _searchIgnorePointer(context.findRenderObject());
-      _ignorePointerProcessed = true;
-    }
+    _disableScrollableIgnorePointer();
 
     return duration;
   }
@@ -497,19 +501,62 @@ class _MarqueerState extends State<Marqueer> with WidgetsBindingObserver {
     timerLoop?.cancel();
   }
 
-  /// Searches and disables IgnorePointer widgets in render tree
-  void _searchIgnorePointer(RenderObject? renderObject) {
-    if (renderObject == null) {
+  /// Forces Flutter's [Scrollable]-internal [RenderIgnorePointer] to keep
+  /// `ignoring=false` so that child gesture detectors stay tappable while the
+  /// marquee is animating.
+  ///
+  /// Background: every time the marquee calls [ScrollController.animateTo],
+  /// Flutter installs a new [ScrollActivity] (e.g. `DrivenScrollActivity`)
+  /// whose `shouldIgnorePointer` is `true`. As of recent Flutter versions,
+  /// [ScrollPosition.beginActivity] reaches the render object directly via
+  /// `context.setIgnorePointer(true)`, bypassing any one-shot override. We
+  /// therefore have to re-apply the override on every new activity. The
+  /// reference is cached so this stays O(1) after the first hit.
+  void _disableScrollableIgnorePointer() {
+    if (!widget.scrollablePointerIgnoring || !mounted) {
       return;
     }
 
-    renderObject.visitChildren((child) {
-      if (child is RenderIgnorePointer) {
-        child.ignoring = false;
-      } else {
-        _searchIgnorePointer(child);
+    final cached = _cachedIgnorePointer;
+    if (cached != null && cached.attached) {
+      if (cached.ignoring) {
+        cached.ignoring = false;
       }
-    });
+      return;
+    }
+
+    _cachedIgnorePointer = _findIgnorePointer(context.findRenderObject());
+    _cachedIgnorePointer?.ignoring = false;
+  }
+
+  /// Depth-first search for the first [RenderIgnorePointer] beneath
+  /// [root]. The one we want belongs to the enclosing [Scrollable] and is the
+  /// closest descendant – returning early keeps this cheap.
+  RenderIgnorePointer? _findIgnorePointer(RenderObject? root) {
+    if (root == null) {
+      return null;
+    }
+
+    RenderIgnorePointer? result;
+
+    void visit(RenderObject node) {
+      if (result != null) {
+        return;
+      }
+      node.visitChildren((child) {
+        if (result != null) {
+          return;
+        }
+        if (child is RenderIgnorePointer) {
+          result = child;
+        } else {
+          visit(child);
+        }
+      });
+    }
+
+    visit(root);
+    return result;
   }
 
   VoidCallback? _isScrollingNotifierListener;
@@ -528,11 +575,21 @@ class _MarqueerState extends State<Marqueer> with WidgetsBindingObserver {
 
     if (!_listenerAttached) {
       _isScrollingNotifierListener = () {
-        if (animating == isScrollingNotifier.value) {
+        final isScrolling = isScrollingNotifier.value;
+
+        if (animating == isScrolling) {
           return;
         }
 
-        animating = isScrollingNotifier.value;
+        animating = isScrolling;
+
+        // ScrollPosition.beginActivity calls `context.setIgnorePointer(true)`
+        // synchronously *before* flipping `isScrollingNotifier`. So whenever
+        // a new scroll activity starts we override Flutter's IgnorePointer
+        // here, ensuring child gestures keep working through every loop.
+        if (isScrolling) {
+          _disableScrollableIgnorePointer();
+        }
       };
 
       isScrollingNotifier.addListener(_isScrollingNotifierListener!);
@@ -639,8 +696,36 @@ class _MarqueerState extends State<Marqueer> with WidgetsBindingObserver {
       _autoStartScheduled = false;
     }
 
-    // Only restart animation if animation speed changed
-    if (widget.pps != oldWidget.pps && animating) {
+    // Sync `interaction` field with widget property. Parent can flip
+    // `widget.interaction` at runtime; without this, the internal field stays
+    // stuck at its initial value.
+    if (widget.interaction != oldWidget.interaction) {
+      interaction = widget.interaction;
+    }
+
+    // Direction affects scroll axis & reverse. Underlying ScrollPosition keeps
+    // the old offset, which is meaningless on the new axis. Reset to 0 and
+    // restart the loop so the marquee behaves correctly after a direction
+    // change.
+    final directionChanged = widget.direction != oldWidget.direction;
+    if (directionChanged) {
+      // Invalidate cached RenderIgnorePointer — the underlying Scrollable will
+      // be re-created when axis flips.
+      _cachedIgnorePointer = null;
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final wasAnimating = animating;
+        stop();
+        if (scrollController.hasClients) {
+          scrollController.jumpTo(0);
+        }
+        if (wasAnimating) start();
+      });
+    }
+
+    // Restart animation when speed changes (only meaningful if running).
+    if (!directionChanged && widget.pps != oldWidget.pps && animating) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && animating) {
           stop();

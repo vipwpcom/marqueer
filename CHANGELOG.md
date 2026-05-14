@@ -1,3 +1,12 @@
+## 2.5.0
+Fixed `scrollablePointerIgnoring` not working after the first animation loop on recent Flutter versions \
+Replaced one-shot `_searchIgnorePointer` call with a cached `RenderIgnorePointer` reference that is re-applied on every new scroll activity via `isScrollingNotifier` \
+Tree traversal now runs only once thanks to caching, keeping performance unchanged \
+Removed `dart:io` import; platform detection now uses `defaultTargetPlatform` so the package compiles cleanly on Flutter Web \
+Added async error handling for `ScrollController.animateTo` so unhandled future errors no longer crash the zone \
+`didUpdateWidget` now syncs `widget.interaction` to the internal field at runtime \
+`didUpdateWidget` now resets scroll offset and restarts the loop when `direction` changes, preventing visual glitches caused by stale offsets on the new axis
+
 ## 2.4.3
 Fixed children update issue by ensuring proxy delegate updates and resetting measured size on widget rebuilds \
 

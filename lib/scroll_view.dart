@@ -22,8 +22,16 @@ class _MarqueerScrollView extends BoxScrollView {
   /// Returns true if platform is web or desktop
   bool get isWebOrDesktop {
     if (kIsWeb) return true;
-    if (Platform.isAndroid || Platform.isIOS) return false;
-    return true; // Desktop platforms
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+      case TargetPlatform.iOS:
+        return false;
+      case TargetPlatform.fuchsia:
+      case TargetPlatform.linux:
+      case TargetPlatform.macOS:
+      case TargetPlatform.windows:
+        return true;
+    }
   }
 
   @override
